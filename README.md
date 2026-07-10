@@ -70,8 +70,14 @@ O painel de resultados está organizado em abas:
 - **Resumo** — o relatório completo das quatro fases, com secções e
   erros/avisos a cores.
 - **Lexemas** — tabela de tokens (lexema, classe, linha, coluna).
-- **Símbolos** — tabela das funções (retorno, nº de parâmetros, se o bloco
-  é vazio e os parâmetros formais).
+- **Símbolos** — tabela de símbolos na **notação clássica**, com uma linha
+  por identificador declarado e as colunas: Identificador, Categoria
+  (programa / funcao / parametro / variável), Tipo, Estrutura Memória
+  (primitivo / ----), **Nível** (numeração hierárquica de âmbito: `0`, `0.1`,
+  `0.2`, `0.2.1`, …), Nº Parâmetros, Sequência de Parâmetros, Forma de
+  Passagem (valor / referencia), Valor, Dimensão e **Referência** (`R1`,
+  `R2`, … — cada função com parâmetros e os seus parâmetros partilham a
+  mesma etiqueta).
 - **AST** — a árvore sintáctica abstracta (funções, parâmetros, corpo,
   instruções e expressões com o respectivo tipo).
 - **Erros** — tabela com o **tipo** do erro (Léxico / Sintáctico /

@@ -257,14 +257,53 @@ public class AnalisadorCabecalhosFuncoes {
         }
     }
 
-    /** Tabela de símbolos das funções declaradas (insere e pesquisa). */
+    /**
+     * Entrada da tabela de símbolos, na notação clássica (uma linha por
+     * identificador declarado). Todos os campos são texto para facilitar a
+     * apresentação; um campo vazio ("") significa "não aplicável".
+     */
+    static final class Simbolo {
+        final String identificador;
+        final String categoria;          // classe / constante / funcao / parametro / variável / programa
+        final String tipo;               // int / double / void / ----
+        final String estruturaMemoria;   // primitivo / objecto / array / ----
+        final String nivel;              // numeração hierárquica de âmbito: 0, 0.1, 0.2, 0.2.1, ...
+        final String numParametros;      // nº de parâmetros formais (funções)
+        final String sequenciaParametros;// sequência dos tipos dos parâmetros
+        final String formaPassagem;      // valor / referencia
+        final String valor;              // valor literal (constantes / inicializações)
+        final String dimensao;           // dimensão (arrays)
+        final String referencia;         // etiqueta de referência: R1, R2, ...
+
+        Simbolo(String identificador, String categoria, String tipo, String estruturaMemoria,
+                String nivel, String numParametros, String sequenciaParametros, String formaPassagem,
+                String valor, String dimensao, String referencia) {
+            this.identificador = identificador;
+            this.categoria = categoria;
+            this.tipo = tipo;
+            this.estruturaMemoria = estruturaMemoria;
+            this.nivel = nivel;
+            this.numParametros = numParametros;
+            this.sequenciaParametros = sequenciaParametros;
+            this.formaPassagem = formaPassagem;
+            this.valor = valor;
+            this.dimensao = dimensao;
+            this.referencia = referencia;
+        }
+    }
+
+    /** Tabela de símbolos: funções (para resolução de chamadas) e entradas na notação clássica. */
     static final class TabelaSimbolos {
         private final Map<String, Funcao> funcoes = new LinkedHashMap<>();
+        private final List<Simbolo> simbolos = new ArrayList<>();
 
         boolean existe(String nome) { return funcoes.containsKey(nome); }
         Funcao obter(String nome) { return funcoes.get(nome); }
         void inserir(Funcao f) { funcoes.put(f.nome, f); }
         List<Funcao> todas() { return new ArrayList<>(funcoes.values()); }
+
+        void adicionarSimbolo(Simbolo s) { simbolos.add(s); }
+        List<Simbolo> simbolos() { return simbolos; }
     }
 
     // ================================================================
@@ -311,11 +350,13 @@ public class AnalisadorCabecalhosFuncoes {
         @Override public String toString() { return rotulo; }
     }
 
-    /** Resultado da análise de uma expressão: o seu tipo e o respectivo nó da AST. */
+    /** Resultado da análise de uma expressão: tipo, nó da AST e valor literal (se houver). */
     static final class ResExpr {
         final Tipo tipo;
         final NoAST no;
-        ResExpr(Tipo tipo, NoAST no) { this.tipo = tipo; this.no = no; }
+        final String valor;   // preenchido apenas quando a expressão é um literal simples
+        ResExpr(Tipo tipo, NoAST no) { this(tipo, no, null); }
+        ResExpr(Tipo tipo, NoAST no, String valor) { this.tipo = tipo; this.no = no; this.valor = valor; }
     }
 
     // ================================================================
@@ -349,6 +390,12 @@ public class AnalisadorCabecalhosFuncoes {
         private final TabelaSimbolos tabela;
         final NoAST raiz = new NoAST("programa");   // raiz da AST construída durante o parsing
         private int pos = 0;
+
+        // Estado para a numeração da tabela de símbolos
+        private int contadorFuncoes = 0;    // funções de topo: nível 0.1, 0.2, ...
+        private int contadorRef = 0;        // etiquetas de referência R1, R2, ...
+        private String nivelFuncaoAtual = "0";
+        private int contadorVarLocal = 0;   // variáveis locais: nível 0.k.1, 0.k.2, ...
 
         // Contexto da função a ser analisada (para validar 'return').
         private Funcao funcaoAtual;
@@ -399,6 +446,9 @@ public class AnalisadorCabecalhosFuncoes {
 
         // ------------------------------ programa ------------------------------
         void analisarPrograma() {
+            // Raiz do âmbito (nível 0)
+            tabela.adicionarSimbolo(new Simbolo("programa", "programa", "----", "----",
+                    "0", "", "", "", "", "", ""));
             while (!fim()) {
                 int posAntes = pos;
                 if (ehInicioDeFuncaoOuDecl()) {
@@ -440,6 +490,23 @@ public class AnalisadorCabecalhosFuncoes {
                 noParams.add(p.tipo.name().toLowerCase() + " " + p.nome);
             }
             noFuncao.add(noParams);
+
+            // Tabela de símbolos (notação clássica): função + parâmetros formais
+            contadorFuncoes++;
+            String nivel = "0." + contadorFuncoes;
+            String ref = formais.isEmpty() ? "" : "R" + (++contadorRef);
+            tabela.adicionarSimbolo(new Simbolo(nomeFuncao, "funcao",
+                    tipoRet.name().toLowerCase(),
+                    tipoRet == Tipo.VOID ? "----" : "primitivo",
+                    nivel, String.valueOf(formais.size()), sequenciaTipos(formais),
+                    "", "", "", ref));
+            for (Parametro p : formais) {
+                tabela.adicionarSimbolo(new Simbolo(p.nome, "parametro",
+                        p.tipo.name().toLowerCase(), "primitivo", nivel,
+                        "", "", "valor", "", "", ref));
+            }
+            nivelFuncaoAtual = nivel;
+            contadorVarLocal = 0;
 
             // Semântica: função repetida?
             if (nome != null) {
@@ -589,9 +656,11 @@ public class AnalisadorCabecalhosFuncoes {
                 }
             }
             NoAST no = new NoAST("declaração " + tipo.name().toLowerCase() + " " + nomeVar);
+            String valorLiteral = "";
             if (verifica(ClasseToken.OP_ATRIB)) {
                 avanca();
                 ResExpr r = analisarExpressao();
+                if (r.valor != null) valorLiteral = r.valor;
                 if (nome != null && !Tipo.compativel(tipo, r.tipo)) {
                     erros.adicionar(Fase.SEMANTICA, nome.linha, nome.coluna,
                             "Não é possível atribuir valor " + r.tipo.name().toLowerCase()
@@ -602,6 +671,13 @@ public class AnalisadorCabecalhosFuncoes {
                 no.add(atrib);
             }
             consome(ClasseToken.PONTO_VIRGULA, "';' no fim da declaração");
+
+            // Tabela de símbolos: variável local (nível 0.k.j)
+            contadorVarLocal++;
+            tabela.adicionarSimbolo(new Simbolo(nomeVar, "variável",
+                    tipo.name().toLowerCase(), "primitivo",
+                    nivelFuncaoAtual + "." + contadorVarLocal,
+                    "", "", "", valorLiteral, "", ""));
             return no;
         }
 
@@ -730,8 +806,8 @@ public class AnalisadorCabecalhosFuncoes {
         private ResExpr analisarTermo() {
             Token t = atual();
             switch (t.classe) {
-                case NUMERO_INT:  avanca(); return new ResExpr(Tipo.INT, new NoAST("literal int " + t.lexema));
-                case NUMERO_REAL: avanca(); return new ResExpr(Tipo.DOUBLE, new NoAST("literal double " + t.lexema));
+                case NUMERO_INT:  avanca(); return new ResExpr(Tipo.INT, new NoAST("literal int " + t.lexema), t.lexema);
+                case NUMERO_REAL: avanca(); return new ResExpr(Tipo.DOUBLE, new NoAST("literal double " + t.lexema), t.lexema);
                 case ABRE_PAR:
                     avanca();
                     ResExpr interno = analisarExpressao();
@@ -767,6 +843,16 @@ public class AnalisadorCabecalhosFuncoes {
             if (a == Tipo.ERRO || b == Tipo.ERRO) return Tipo.ERRO;
             if (a == Tipo.DOUBLE || b == Tipo.DOUBLE) return Tipo.DOUBLE;
             return Tipo.INT;
+        }
+
+        /** Sequência dos tipos dos parâmetros formais, ex.: "int, double". */
+        private String sequenciaTipos(List<Parametro> ps) {
+            StringBuilder sb = new StringBuilder();
+            for (int i = 0; i < ps.size(); i++) {
+                if (i > 0) sb.append(", ");
+                sb.append(ps.get(i).tipo.name().toLowerCase());
+            }
+            return sb.toString();
         }
 
         private Tipo tipoDe(String lex) {
@@ -811,28 +897,20 @@ public class AnalisadorCabecalhosFuncoes {
                     t.lexema, t.classe, t.linha, t.coluna);
         }
 
-        // 3) Tabela de símbolos
-        out.println("\n[3] TABELA DE SÍMBOLOS (FUNÇÕES)");
-        out.println("----------------------------------------------------------------------");
-        if (tabela.todas().isEmpty()) {
-            out.println("  (nenhuma função declarada)");
-        } else {
-            out.printf("%-14s | %-8s | %-6s | %-8s | %s%n",
-                    "NOME", "RETORNO", "Nº PAR", "BLOCO", "PARÂMETROS FORMAIS");
-            out.println("----------------------------------------------------------------------");
-            for (Funcao f : tabela.todas()) {
-                StringBuilder pars = new StringBuilder();
-                for (int i = 0; i < f.parametros.size(); i++) {
-                    if (i > 0) pars.append(", ");
-                    pars.append(f.parametros.get(i).tipo.name().toLowerCase())
-                        .append(' ').append(f.parametros.get(i).nome);
-                }
-                out.printf("%-14s | %-8s | %-6d | %-8s | %s%n",
-                        f.nome, f.tipoRetorno.name().toLowerCase(), f.parametros.size(),
-                        f.blocoVazio ? "vazio" : "ok",
-                        pars.length() == 0 ? "(sem parâmetros)" : pars.toString());
-            }
+        // 3) Tabela de símbolos (notação clássica)
+        out.println("\n[3] TABELA DE SÍMBOLOS");
+        String sepSimb = "---------------------------------------------------------------------------------------------------------------------------------";
+        out.println(sepSimb);
+        String fmt = "%-12s | %-10s | %-7s | %-9s | %-8s | %-6s | %-16s | %-9s | %-6s | %-4s | %-4s%n";
+        out.printf(fmt, "Identific.", "Categoria", "Tipo", "Est.Mem.", "Nível",
+                "NºPar", "Seq.Parâmetros", "F.Pass.", "Valor", "Dim.", "Ref.");
+        out.println(sepSimb);
+        for (Simbolo s : tabela.simbolos()) {
+            out.printf(fmt, s.identificador, s.categoria, s.tipo, s.estruturaMemoria, s.nivel,
+                    s.numParametros, s.sequenciaParametros, s.formaPassagem, s.valor,
+                    s.dimensao, s.referencia);
         }
+        out.println(sepSimb);
 
         // 4) Lista de erros e avisos
         out.println("\n[4] ERROS E AVISOS");
@@ -1302,8 +1380,10 @@ public class AnalisadorCabecalhosFuncoes {
             modeloLexemas = modeloFixo("#", "Lexema", "Classe", "Linha", "Coluna");
             abas.addTab("Lexemas", envolver(criarTabela(modeloLexemas)));
 
-            // Tabela de símbolos
-            modeloSimbolos = modeloFixo("Função", "Retorno", "Nº Parâm.", "Bloco", "Parâmetros formais");
+            // Tabela de símbolos (notação clássica)
+            modeloSimbolos = modeloFixo("Identificador", "Categoria", "Tipo", "Estrutura Memória",
+                    "Nível", "Nº Parâm.", "Sequência Parâm.", "Forma Passagem", "Valor",
+                    "Dimensão", "Referência");
             abas.addTab("Símbolos", envolver(criarTabela(modeloSimbolos)));
 
             // AST
@@ -1405,18 +1485,12 @@ public class AnalisadorCabecalhosFuncoes {
                 if (tk.classe == ClasseToken.EOF) continue;
                 modeloLexemas.addRow(new Object[]{ i++, tk.lexema, tk.classe, tk.linha, tk.coluna });
             }
-            // Símbolos
+            // Símbolos (notação clássica)
             modeloSimbolos.setRowCount(0);
-            for (Funcao f : r.tabela.todas()) {
-                StringBuilder pars = new StringBuilder();
-                for (int k = 0; k < f.parametros.size(); k++) {
-                    if (k > 0) pars.append(", ");
-                    pars.append(f.parametros.get(k).tipo.name().toLowerCase())
-                        .append(' ').append(f.parametros.get(k).nome);
-                }
-                modeloSimbolos.addRow(new Object[]{ f.nome, f.tipoRetorno.name().toLowerCase(),
-                        f.parametros.size(), f.blocoVazio ? "vazio" : "ok",
-                        pars.length() == 0 ? "(sem parâmetros)" : pars.toString() });
+            for (Simbolo s : r.tabela.simbolos()) {
+                modeloSimbolos.addRow(new Object[]{ s.identificador, s.categoria, s.tipo,
+                        s.estruturaMemoria, s.nivel, s.numParametros, s.sequenciaParametros,
+                        s.formaPassagem, s.valor, s.dimensao, s.referencia });
             }
             // Erros
             modeloErros.setRowCount(0);
