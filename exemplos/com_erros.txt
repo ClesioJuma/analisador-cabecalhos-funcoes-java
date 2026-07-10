@@ -1,0 +1,36 @@
+// Programa que exercita todos os tipos de erro
+
+int soma(int a, int b) {
+    return a + b;
+}
+
+// funcao duplicada -> erro semantico
+int soma(int a, int b) {
+    return a;
+}
+
+// parametro formal do tipo void -> erro semantico
+void erra(void v) {
+    return 5;          // void a retornar valor -> erro semantico
+}
+
+// funcao int sem return com valor -> erro semantico
+int semRetorno(int x) {
+    x = x + 1;
+}
+
+// bloco de instrucoes vazio -> aviso
+void vazia(int n) {
+}
+
+// parametro real mal formado -> erro lexico
+double mau(double d) {
+    return 3.;
+}
+
+// chamadas com problemas nos parametros actuais
+soma(1);                 // numero de parametros errado
+soma(1, 2, 3);           // numero de parametros errado
+mau(soma(1, 2), 2.0);    // int passado onde se espera double (ok) mas nº errado
+inexistente(1);          // funcao nao declarada
+vazia(2.5);              // double passado para parametro formal int -> erro

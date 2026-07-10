@@ -1,0 +1,22 @@
+// Programa sem erros: cabecalhos int/double/void, parametros e chamadas correctas
+int soma(int a, int b) {
+    return a + b;
+}
+
+double media(int a, int b) {
+    double total = soma(a, b);
+    double m = total;
+    return m;
+}
+
+void mostrar(double valor) {
+    return;
+}
+
+int quadrado(int n) {
+    return n * n;
+}
+
+// chamadas com parametros actuais compativeis
+mostrar(media(4, 6));
+quadrado(soma(2, 3));
