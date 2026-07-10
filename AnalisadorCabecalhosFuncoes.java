@@ -1,8 +1,6 @@
-import java.awt.BorderLayout;
-import java.awt.Color;
-import java.awt.Dimension;
-import java.awt.Font;
-import java.awt.GridLayout;
+import java.awt.*;
+import java.awt.event.*;
+import java.awt.geom.Rectangle2D;
 import java.io.File;
 import java.io.IOException;
 import java.io.PrintWriter;
@@ -14,19 +12,12 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
-import javax.swing.BorderFactory;
-import javax.swing.JButton;
-import javax.swing.JFileChooser;
-import javax.swing.JFrame;
-import javax.swing.JLabel;
-import javax.swing.JOptionPane;
-import javax.swing.JPanel;
-import javax.swing.JScrollPane;
-import javax.swing.JSplitPane;
-import javax.swing.JTextArea;
-import javax.swing.SwingUtilities;
-import javax.swing.UIManager;
-import javax.swing.border.EmptyBorder;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
+import javax.swing.*;
+import javax.swing.border.*;
+import javax.swing.event.*;
+import javax.swing.text.*;
 
 /**
  * Analisador de Cabeçalhos de Funções da Linguagem Java.
@@ -812,14 +803,30 @@ public class AnalisadorCabecalhosFuncoes {
         return sw.toString();
     }
 
-    /** Resultado de uma análise: relatório em texto e indicação de erros. */
+    /** Resultado de uma análise: estruturas das fases, relatório em texto e contagens. */
     static final class Resultado {
+        final String origem;
+        final List<Token> tokens;
+        final TabelaSimbolos tabela;
+        final ColetorErros erros;
         final String relatorio;
-        final boolean temErros;
-        Resultado(String relatorio, boolean temErros) {
+        final int nErros;
+        final int nAvisos;
+
+        Resultado(String origem, List<Token> tokens, TabelaSimbolos tabela,
+                  ColetorErros erros, String relatorio) {
+            this.origem = origem;
+            this.tokens = tokens;
+            this.tabela = tabela;
+            this.erros = erros;
             this.relatorio = relatorio;
-            this.temErros = temErros;
+            int e = 0, a = 0;
+            for (Erro er : erros.ordenados()) { if (er.fase == Fase.AVISO) a++; else e++; }
+            this.nErros = e;
+            this.nAvisos = a;
         }
+
+        boolean temErros() { return nErros > 0; }
     }
 
     /** Executa as três fases sobre o código fonte e devolve o relatório. */
@@ -829,7 +836,7 @@ public class AnalisadorCabecalhosFuncoes {
         List<Token> tokens = new Lexer(origem, erros).tokenizar();   // Fase 1 — Léxica
         new Parser(tokens, erros, tabela).analisarPrograma();        // Fases 2 e 3
         String rel = gerarRelatorio(origem, tokens, tabela, erros);  // Fase 4
-        return new Resultado(rel, erros.temErros());
+        return new Resultado(origem, tokens, tabela, erros, rel);
     }
 
     // ================================================================
@@ -890,20 +897,152 @@ public class AnalisadorCabecalhosFuncoes {
         System.out.print(r.relatorio);
 
         // Código de saída: 1 se houve erros (não conta avisos)
-        if (r.temErros) System.exit(1);
+        if (r.temErros()) System.exit(1);
     }
 
     // ================================================================
-    // INTERFACE GRÁFICA (Swing) — mesma lógica, com janela desktop
+    // INTERFACE GRÁFICA (Swing) — tema escuro, sem dependências externas
     // ================================================================
+
+    // Paleta e tipos de letra partilhados pelos componentes da GUI.
+    private static final Color BG        = new Color(0x1E1F2B); // fundo geral
+    private static final Color BG_BARRA  = new Color(0x171821); // cabeçalho
+    private static final Color BG_CARTAO = new Color(0x262A3B); // cartões/relatório
+    private static final Color BG_EDITOR = new Color(0x22242F); // editor de código
+    private static final Color BORDA     = new Color(0x343850);
+    private static final Color ACENTO    = new Color(0x7C6CFF);
+    private static final Color ACENTO_H  = new Color(0x9385FF);
+    private static final Color TXT       = new Color(0xE6E7EE);
+    private static final Color TXT_MUTE  = new Color(0x9AA0B4);
+    private static final Color COR_ERRO  = new Color(0xFF6B6B);
+    private static final Color COR_AVISO = new Color(0xFFB454);
+    private static final Color COR_OK    = new Color(0x4ADE80);
+    // Realce de sintaxe
+    private static final Color SX_KW  = new Color(0xC792EA); // palavras-chave
+    private static final Color SX_NUM = new Color(0xF78C6C); // números
+    private static final Color SX_CMT = new Color(0x6B7089); // comentários
+
+    private static final Font FONTE_MONO = new Font(Font.MONOSPACED, Font.PLAIN, 14);
+    private static final Font FONTE_UI    = new Font(Font.SANS_SERIF, Font.PLAIN, 12);
+    private static final Font FONTE_UI_B  = new Font(Font.SANS_SERIF, Font.BOLD, 13);
+
+    /** Botão "flat" com cantos arredondados e efeito de hover. */
+    static final class BotaoChato extends JButton {
+        private final Color base, hover;
+        private boolean dentro;
+        BotaoChato(String txt, Color base, Color hover, Color texto) {
+            super(txt);
+            this.base = base;
+            this.hover = hover;
+            setForeground(texto);
+            setFont(FONTE_UI_B);
+            setFocusPainted(false);
+            setContentAreaFilled(false);
+            setBorderPainted(false);
+            setOpaque(false);
+            setBorder(new EmptyBorder(9, 18, 9, 18));
+            setCursor(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR));
+            addMouseListener(new MouseAdapter() {
+                @Override public void mouseEntered(MouseEvent e) { dentro = true; repaint(); }
+                @Override public void mouseExited(MouseEvent e) { dentro = false; repaint(); }
+            });
+        }
+        @Override protected void paintComponent(Graphics g) {
+            Graphics2D g2 = (Graphics2D) g.create();
+            g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
+            g2.setColor(dentro ? hover : base);
+            g2.fillRoundRect(0, 0, getWidth(), getHeight(), 12, 12);
+            g2.dispose();
+            super.paintComponent(g);
+        }
+    }
+
+    /** Etiqueta arredondada colorida (chip) para o rodapé de estado. */
+    static final class Chip extends JLabel {
+        private final Color cor;
+        Chip(String txt, Color cor) {
+            super(txt);
+            this.cor = cor;
+            setForeground(cor);
+            setFont(new Font(Font.SANS_SERIF, Font.BOLD, 12));
+            setBorder(new EmptyBorder(5, 12, 5, 12));
+            setOpaque(false);
+        }
+        @Override protected void paintComponent(Graphics g) {
+            Graphics2D g2 = (Graphics2D) g.create();
+            g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
+            g2.setColor(new Color(cor.getRed(), cor.getGreen(), cor.getBlue(), 38));
+            g2.fillRoundRect(0, 0, getWidth(), getHeight(), 14, 14);
+            g2.setColor(new Color(cor.getRed(), cor.getGreen(), cor.getBlue(), 120));
+            g2.drawRoundRect(0, 0, getWidth() - 1, getHeight() - 1, 14, 14);
+            g2.dispose();
+            super.paintComponent(g);
+        }
+    }
+
+    /** Régua de números de linha, sincronizada com o editor de código. */
+    static final class GutterLinhas extends JComponent {
+        private final JTextComponent txt;
+        GutterLinhas(JTextComponent txt) {
+            this.txt = txt;
+            setFont(txt.getFont());
+            txt.getDocument().addDocumentListener(new DocumentListener() {
+                @Override public void insertUpdate(DocumentEvent e) { revalidate(); repaint(); }
+                @Override public void removeUpdate(DocumentEvent e) { revalidate(); repaint(); }
+                @Override public void changedUpdate(DocumentEvent e) { repaint(); }
+            });
+        }
+        private int digitos() {
+            int linhas = txt.getDocument().getDefaultRootElement().getElementCount();
+            return Math.max(2, String.valueOf(linhas).length());
+        }
+        @Override public Dimension getPreferredSize() {
+            FontMetrics fm = getFontMetrics(getFont());
+            return new Dimension(fm.charWidth('0') * digitos() + 20, Math.max(txt.getHeight(), 1));
+        }
+        @Override protected void paintComponent(Graphics g) {
+            Graphics2D g2 = (Graphics2D) g;
+            g2.setColor(BG_EDITOR);
+            g2.fillRect(0, 0, getWidth(), getHeight());
+            g2.setColor(BORDA);
+            g2.drawLine(getWidth() - 1, 0, getWidth() - 1, getHeight());
+            g2.setFont(getFont());
+            g2.setColor(TXT_MUTE);
+            Element raiz = txt.getDocument().getDefaultRootElement();
+            Rectangle clip = g.getClipBounds();
+            FontMetrics fm = g.getFontMetrics(getFont());
+            int total = raiz.getElementCount();
+            for (int i = 0; i < total; i++) {
+                int off = raiz.getElement(i).getStartOffset();
+                try {
+                    Rectangle2D r = txt.modelToView2D(off);
+                    if (r == null) continue;
+                    int y = (int) r.getY();
+                    int alt = (int) r.getHeight();
+                    if (y + alt < clip.y || y > clip.y + clip.height) continue;
+                    String n = String.valueOf(i + 1);
+                    int baseline = y + fm.getAscent() + (alt - fm.getHeight()) / 2;
+                    g2.drawString(n, getWidth() - 10 - fm.stringWidth(n), baseline);
+                } catch (BadLocationException ex) { /* ignora */ }
+            }
+        }
+    }
+
     /**
-     * Janela Swing simples: à esquerda escreve-se/cola-se o código, à direita
-     * aparece o relatório das quatro fases. Sem dependências externas.
+     * Janela principal: editor de código com realce e números de linha à
+     * esquerda; relatório colorido das quatro fases à direita; chips de estado.
      */
     static final class AnalisadorGUI extends JFrame {
-        private final JTextArea areaCodigo;
-        private final JTextArea areaRelatorio;
-        private final JLabel estado;
+        private final JTextPane areaCodigo;
+        private final JTextPane areaRelatorio;
+        private final JPanel painelChips;
+        private final Timer debounce;
+
+        // Estilos do realce de sintaxe
+        private final SimpleAttributeSet estBase = new SimpleAttributeSet();
+        private final SimpleAttributeSet estKw   = new SimpleAttributeSet();
+        private final SimpleAttributeSet estNum  = new SimpleAttributeSet();
+        private final SimpleAttributeSet estCmt  = new SimpleAttributeSet();
 
         AnalisadorGUI() {
             super("Analisador de Cabeçalhos de Funções Java");
@@ -911,78 +1050,232 @@ public class AnalisadorCabecalhosFuncoes {
                 UIManager.setLookAndFeel(UIManager.getSystemLookAndFeelClassName());
             } catch (Exception ignorado) { /* mantém o aspecto por omissão */ }
 
+            StyleConstants.setForeground(estBase, TXT);
+            StyleConstants.setForeground(estKw, SX_KW);  StyleConstants.setBold(estKw, true);
+            StyleConstants.setForeground(estNum, SX_NUM);
+            StyleConstants.setForeground(estCmt, SX_CMT); StyleConstants.setItalic(estCmt, true);
+
             setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
-            Font mono = new Font(Font.MONOSPACED, Font.PLAIN, 13);
+            getContentPane().setBackground(BG);
+            ((JComponent) getContentPane()).setBorder(new EmptyBorder(0, 0, 0, 0));
 
-            // ---- Área de código (entrada) ----
-            areaCodigo = new JTextArea(EXEMPLO_EMBUTIDO);
-            areaCodigo.setFont(mono);
-            areaCodigo.setBorder(new EmptyBorder(6, 8, 6, 8));
+            // ---- Editor de código (não quebra linhas: scroll horizontal) ----
+            areaCodigo = new JTextPane() {
+                @Override public boolean getScrollableTracksViewportWidth() {
+                    return getUI().getPreferredSize(this).width <= getParent().getSize().width;
+                }
+            };
+            areaCodigo.setFont(FONTE_MONO);
+            areaCodigo.setBackground(BG_EDITOR);
+            areaCodigo.setForeground(TXT);
+            areaCodigo.setCaretColor(TXT);
+            areaCodigo.setSelectionColor(new Color(0x3A3F5F));
+            areaCodigo.setSelectedTextColor(TXT);
+            areaCodigo.setBorder(new EmptyBorder(10, 12, 10, 12));
+            areaCodigo.setText(EXEMPLO_EMBUTIDO);
+            areaCodigo.getDocument().addDocumentListener(new DocumentListener() {
+                @Override public void insertUpdate(DocumentEvent e) { aoEditar(); }
+                @Override public void removeUpdate(DocumentEvent e) { aoEditar(); }
+                @Override public void changedUpdate(DocumentEvent e) { }
+            });
+
             JScrollPane spCodigo = new JScrollPane(areaCodigo);
-            spCodigo.setBorder(BorderFactory.createTitledBorder("Código fonte"));
+            spCodigo.setBorder(null);
+            spCodigo.getViewport().setBackground(BG_EDITOR);
+            spCodigo.setRowHeaderView(new GutterLinhas(areaCodigo));
 
-            // ---- Área de relatório (saída) ----
-            areaRelatorio = new JTextArea();
-            areaRelatorio.setFont(mono);
+            // ---- Relatório colorido ----
+            areaRelatorio = new JTextPane();
+            areaRelatorio.setFont(new Font(Font.MONOSPACED, Font.PLAIN, 13));
             areaRelatorio.setEditable(false);
-            areaRelatorio.setBorder(new EmptyBorder(6, 8, 6, 8));
+            areaRelatorio.setBackground(BG_CARTAO);
+            areaRelatorio.setBorder(new EmptyBorder(10, 12, 10, 12));
             JScrollPane spRelatorio = new JScrollPane(areaRelatorio);
-            spRelatorio.setBorder(BorderFactory.createTitledBorder("Relatório (Léxico · Sintáctico · Semântico)"));
+            spRelatorio.setBorder(null);
+            spRelatorio.getViewport().setBackground(BG_CARTAO);
 
-            JSplitPane divisor = new JSplitPane(JSplitPane.HORIZONTAL_SPLIT, spCodigo, spRelatorio);
-            divisor.setResizeWeight(0.42);
+            JSplitPane divisor = new JSplitPane(JSplitPane.HORIZONTAL_SPLIT,
+                    construirCartao("CÓDIGO FONTE", spCodigo),
+                    construirCartao("RELATÓRIO  ·  LÉXICO · SINTÁCTICO · SEMÂNTICO", spRelatorio));
+            divisor.setResizeWeight(0.44);
+            divisor.setBorder(new EmptyBorder(10, 12, 6, 12));
+            divisor.setBackground(BG);
+            divisor.setDividerSize(10);
 
-            estado = new JLabel(" ");
-            estado.setBorder(new EmptyBorder(2, 10, 6, 10));
+            // ---- Rodapé com chips de estado ----
+            painelChips = new JPanel(new FlowLayout(FlowLayout.LEFT, 8, 8));
+            painelChips.setBackground(BG);
+            painelChips.setBorder(new EmptyBorder(0, 8, 6, 8));
 
-            // ---- Barra de botões ----
-            JButton btAnalisar = new JButton("Analisar");
-            JButton btExemplo = new JButton("Exemplo");
-            JButton btAbrir = new JButton("Abrir ficheiro…");
-            JButton btLimpar = new JButton("Limpar");
+            // ---- Montagem ----
+            JPanel norte = new JPanel(new BorderLayout());
+            norte.setBackground(BG);
+            norte.add(construirCabecalho(), BorderLayout.NORTH);
+            norte.add(construirBarra(), BorderLayout.SOUTH);
 
-            btAnalisar.addActionListener(e -> analisarAgora());
-            btExemplo.addActionListener(e -> { areaCodigo.setText(EXEMPLO_EMBUTIDO); analisarAgora(); });
-            btAbrir.addActionListener(e -> abrirFicheiro());
-            btLimpar.addActionListener(e -> { areaCodigo.setText(""); areaRelatorio.setText(""); estado.setText(" "); });
-
-            JPanel botoes = new JPanel(new GridLayout(1, 0, 8, 0));
-            botoes.setBorder(new EmptyBorder(8, 8, 4, 8));
-            botoes.add(btAnalisar);
-            botoes.add(btExemplo);
-            botoes.add(btAbrir);
-            botoes.add(btLimpar);
-
-            JPanel topo = new JPanel(new BorderLayout());
-            topo.add(botoes, BorderLayout.CENTER);
-
-            JPanel rodape = new JPanel(new BorderLayout());
-            rodape.add(estado, BorderLayout.WEST);
-
-            add(topo, BorderLayout.NORTH);
+            add(norte, BorderLayout.NORTH);
             add(divisor, BorderLayout.CENTER);
-            add(rodape, BorderLayout.SOUTH);
+            add(painelChips, BorderLayout.SOUTH);
 
-            setPreferredSize(new Dimension(1050, 640));
+            debounce = new Timer(250, e -> analisarAgora());
+            debounce.setRepeats(false);
+
+            setPreferredSize(new Dimension(1080, 680));
             pack();
             setLocationRelativeTo(null);
             setVisible(true);
 
-            analisarAgora(); // análise inicial do exemplo
+            realcarSintaxe();
+            analisarAgora();
         }
 
-        private void analisarAgora() {
-            String origem = areaCodigo.getText();
-            Resultado r = analisar(origem);
-            areaRelatorio.setText(r.relatorio);
-            areaRelatorio.setCaretPosition(0);
-            if (r.temErros) {
-                estado.setText("Foram encontrados erros — ver o quadro [4] do relatório.");
-                estado.setForeground(new Color(0xB00020));
-            } else {
-                estado.setText("Análise concluída sem erros.");
-                estado.setForeground(new Color(0x1B7F3B));
+        // ---- Cabeçalho (título + subtítulo + barra de acento) ----
+        private JComponent construirCabecalho() {
+            JPanel textos = new JPanel();
+            textos.setOpaque(false);
+            textos.setLayout(new BoxLayout(textos, BoxLayout.Y_AXIS));
+            JLabel titulo = new JLabel("Analisador de Cabeçalhos de Funções Java");
+            titulo.setFont(new Font(Font.SANS_SERIF, Font.BOLD, 19));
+            titulo.setForeground(TXT);
+            titulo.setAlignmentX(LEFT_ALIGNMENT);
+            JLabel sub = new JLabel("Funções int / double / void  ·  parâmetros formais vs. actuais  ·  blocos vazios");
+            sub.setFont(FONTE_UI);
+            sub.setForeground(TXT_MUTE);
+            sub.setAlignmentX(LEFT_ALIGNMENT);
+            textos.add(titulo);
+            textos.add(Box.createVerticalStrut(3));
+            textos.add(sub);
+
+            JPanel barraTitulo = new JPanel(new BorderLayout());
+            barraTitulo.setBackground(BG_BARRA);
+            barraTitulo.setBorder(new EmptyBorder(16, 22, 16, 22));
+            barraTitulo.add(textos, BorderLayout.WEST);
+
+            JPanel acento = new JPanel();
+            acento.setBackground(ACENTO);
+            acento.setPreferredSize(new Dimension(0, 3));
+
+            JPanel wrap = new JPanel(new BorderLayout());
+            wrap.add(barraTitulo, BorderLayout.CENTER);
+            wrap.add(acento, BorderLayout.SOUTH);
+            return wrap;
+        }
+
+        // ---- Barra de botões ----
+        private JComponent construirBarra() {
+            JPanel p = new JPanel(new FlowLayout(FlowLayout.LEFT, 10, 10));
+            p.setBackground(BG);
+            BotaoChato bAnalisar = new BotaoChato("Analisar", ACENTO, ACENTO_H, Color.WHITE);
+            BotaoChato bExemplo  = new BotaoChato("Exemplo", BG_CARTAO, BORDA, TXT);
+            BotaoChato bAbrir    = new BotaoChato("Abrir ficheiro…", BG_CARTAO, BORDA, TXT);
+            BotaoChato bLimpar   = new BotaoChato("Limpar", BG_CARTAO, BORDA, TXT);
+            bAnalisar.addActionListener(e -> analisarAgora());
+            bExemplo.addActionListener(e -> definirCodigo(EXEMPLO_EMBUTIDO));
+            bAbrir.addActionListener(e -> abrirFicheiro());
+            bLimpar.addActionListener(e -> definirCodigo(""));
+            p.add(bAnalisar);
+            p.add(bExemplo);
+            p.add(bAbrir);
+            p.add(bLimpar);
+            return p;
+        }
+
+        // ---- Cartão com título e conteúdo ----
+        private JComponent construirCartao(String titulo, JComponent centro) {
+            JLabel lbl = new JLabel(titulo);
+            lbl.setFont(FONTE_UI_B);
+            lbl.setForeground(TXT_MUTE);
+            JPanel cabec = new JPanel(new BorderLayout());
+            cabec.setBackground(BG_CARTAO);
+            cabec.setBorder(new EmptyBorder(9, 14, 9, 14));
+            cabec.add(lbl, BorderLayout.WEST);
+
+            JPanel cartao = new JPanel(new BorderLayout());
+            cartao.setBackground(BG_CARTAO);
+            cartao.setBorder(new LineBorder(BORDA, 1, true));
+            cartao.add(cabec, BorderLayout.NORTH);
+            cartao.add(centro, BorderLayout.CENTER);
+            return cartao;
+        }
+
+        private void aoEditar() {
+            SwingUtilities.invokeLater(this::realcarSintaxe); // evita mutação durante notificação
+            debounce.restart();
+        }
+
+        private void definirCodigo(String s) {
+            areaCodigo.setText(s);
+            realcarSintaxe();
+            analisarAgora();
+        }
+
+        // ---- Realce de sintaxe do editor ----
+        private void realcarSintaxe() {
+            StyledDocument doc = areaCodigo.getStyledDocument();
+            String texto;
+            try { texto = doc.getText(0, doc.getLength()); }
+            catch (BadLocationException e) { return; }
+            doc.setCharacterAttributes(0, doc.getLength(), estBase, true);
+            aplicar(doc, texto, "\\b(int|double|void|return)\\b", estKw, 0);
+            aplicar(doc, texto, "\\b\\d+(\\.\\d+)?\\b", estNum, 0);
+            aplicar(doc, texto, "//[^\\n]*", estCmt, 0);                 // comentário de linha
+            aplicar(doc, texto, "/\\*.*?\\*/", estCmt, Pattern.DOTALL);  // comentário de bloco
+        }
+
+        private void aplicar(StyledDocument doc, String texto, String regex, AttributeSet est, int flags) {
+            Matcher m = Pattern.compile(regex, flags).matcher(texto);
+            while (m.find()) {
+                doc.setCharacterAttributes(m.start(), m.end() - m.start(), est, false);
             }
+        }
+
+        // ---- Análise + render ----
+        private void analisarAgora() {
+            Resultado r = analisar(areaCodigo.getText());
+            renderRelatorio(r);
+            atualizarChips(r);
+        }
+
+        private void renderRelatorio(Resultado r) {
+            StyledDocument d = new DefaultStyledDocument();
+            for (String linha : r.relatorio.split("\n", -1)) {
+                try { d.insertString(d.getLength(), linha + "\n", estiloLinha(linha)); }
+                catch (BadLocationException ignorado) { }
+            }
+            areaRelatorio.setDocument(d);
+            areaRelatorio.setCaretPosition(0);
+        }
+
+        private AttributeSet estiloLinha(String linha) {
+            if (linha.contains("====")) return attr(SX_CMT, false);
+            if (linha.startsWith("[")) return attr(ACENTO, true);              // títulos [1]..[4]
+            if (linha.contains("ANALISADOR DE CAB")) return attr(ACENTO, true);
+            if (linha.contains("[ERRO")) return attr(COR_ERRO, false);
+            if (linha.contains("[AVISO")) return attr(COR_AVISO, false);
+            if (linha.contains("Nenhum erro")) return attr(COR_OK, true);
+            if (linha.trim().startsWith("Total:")) return attr(TXT, true);
+            if (linha.matches("\\s*\\d+ \\|.*")) return attr(TXT_MUTE, false); // listagem do código
+            return attr(TXT, false);
+        }
+
+        private AttributeSet attr(Color c, boolean bold) {
+            SimpleAttributeSet a = new SimpleAttributeSet();
+            StyleConstants.setForeground(a, c);
+            StyleConstants.setBold(a, bold);
+            StyleConstants.setFontFamily(a, Font.MONOSPACED);
+            StyleConstants.setFontSize(a, 13);
+            return a;
+        }
+
+        private void atualizarChips(Resultado r) {
+            painelChips.removeAll();
+            painelChips.add(new Chip(r.nErros == 0 ? "Sem erros" : r.nErros + " erro(s)",
+                    r.nErros > 0 ? COR_ERRO : COR_OK));
+            painelChips.add(new Chip(r.nAvisos + " aviso(s)", r.nAvisos > 0 ? COR_AVISO : TXT_MUTE));
+            painelChips.add(new Chip(r.tabela.todas().size() + " função(ões)", ACENTO));
+            painelChips.add(new Chip(Math.max(0, r.tokens.size() - 1) + " tokens", TXT_MUTE));
+            painelChips.revalidate();
+            painelChips.repaint();
         }
 
         private void abrirFicheiro() {
@@ -990,9 +1283,7 @@ public class AnalisadorCabecalhosFuncoes {
             if (selector.showOpenDialog(this) == JFileChooser.APPROVE_OPTION) {
                 File f = selector.getSelectedFile();
                 try {
-                    String conteudo = new String(Files.readAllBytes(f.toPath()), StandardCharsets.UTF_8);
-                    areaCodigo.setText(conteudo);
-                    analisarAgora();
+                    definirCodigo(new String(Files.readAllBytes(f.toPath()), StandardCharsets.UTF_8));
                 } catch (IOException ex) {
                     JOptionPane.showMessageDialog(this,
                             "Não foi possível ler o ficheiro:\n" + ex.getMessage(),
