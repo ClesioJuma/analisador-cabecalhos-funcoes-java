@@ -17,7 +17,9 @@ import java.util.regex.Pattern;
 import javax.swing.*;
 import javax.swing.border.*;
 import javax.swing.event.*;
+import javax.swing.table.*;
 import javax.swing.text.*;
+import javax.swing.tree.*;
 
 /**
  * Analisador de Cabeçalhos de Funções da Linguagem Java.
@@ -297,6 +299,26 @@ public class AnalisadorCabecalhosFuncoes {
     }
 
     // ================================================================
+    // ÁRVORE SINTÁCTICA ABSTRACTA (AST)
+    // ================================================================
+    /** Nó genérico da AST: um rótulo e os seus filhos. */
+    static final class NoAST {
+        final String rotulo;
+        final List<NoAST> filhos = new ArrayList<>();
+        NoAST(String rotulo) { this.rotulo = rotulo; }
+        NoAST add(NoAST f) { if (f != null) filhos.add(f); return this; }
+        NoAST add(String r) { filhos.add(new NoAST(r)); return this; }
+        @Override public String toString() { return rotulo; }
+    }
+
+    /** Resultado da análise de uma expressão: o seu tipo e o respectivo nó da AST. */
+    static final class ResExpr {
+        final Tipo tipo;
+        final NoAST no;
+        ResExpr(Tipo tipo, NoAST no) { this.tipo = tipo; this.no = no; }
+    }
+
+    // ================================================================
     // FASE 2 e 3 — ANÁLISE SINTÁCTICA + SEMÂNTICA
     // ================================================================
     /**
@@ -325,6 +347,7 @@ public class AnalisadorCabecalhosFuncoes {
         private final List<Token> tokens;
         private final ColetorErros erros;
         private final TabelaSimbolos tabela;
+        final NoAST raiz = new NoAST("programa");   // raiz da AST construída durante o parsing
         private int pos = 0;
 
         // Contexto da função a ser analisada (para validar 'return').
@@ -379,10 +402,10 @@ public class AnalisadorCabecalhosFuncoes {
             while (!fim()) {
                 int posAntes = pos;
                 if (ehInicioDeFuncaoOuDecl()) {
-                    analisarFuncao();
+                    raiz.add(analisarFuncao());
                 } else if (verifica(ClasseToken.IDENTIFICADOR)) {
                     // Chamada de função ao nível de topo, terminada por ';'
-                    analisarChamadaComoInstrucao(new java.util.HashMap<>());
+                    raiz.add(analisarChamadaComoInstrucao(new java.util.HashMap<>()));
                 } else {
                     Token t = atual();
                     erros.adicionar(Fase.SINTATICA, t.linha, t.coluna,
@@ -395,7 +418,7 @@ public class AnalisadorCabecalhosFuncoes {
         }
 
         // ------------------------------ funcao ------------------------------
-        private void analisarFuncao() {
+        private NoAST analisarFuncao() {
             Token tTipo = avanca(); // int | double | void
             Tipo tipoRet = tipoDe(tTipo.lexema);
 
@@ -409,6 +432,14 @@ public class AnalisadorCabecalhosFuncoes {
             consome(ClasseToken.FECHA_PAR, "')' a fechar os parâmetros formais");
 
             Funcao funcao = new Funcao(nomeFuncao, tipoRet, formais, linhaFuncao);
+
+            // Nó da AST para esta função
+            NoAST noFuncao = new NoAST("função " + nomeFuncao + " : " + tipoRet.name().toLowerCase());
+            NoAST noParams = new NoAST("parâmetros formais (" + formais.size() + ")");
+            for (Parametro p : formais) {
+                noParams.add(p.tipo.name().toLowerCase() + " " + p.nome);
+            }
+            noFuncao.add(noParams);
 
             // Semântica: função repetida?
             if (nome != null) {
@@ -439,7 +470,9 @@ public class AnalisadorCabecalhosFuncoes {
             escopo = escopoLocal;
             encontrouRetornoValido = false;
 
-            int instrucoes = analisarBloco();
+            NoAST corpo = analisarBloco();
+            noFuncao.add(corpo);
+            int instrucoes = corpo.filhos.size();
             funcao.blocoVazio = instrucoes == 0;
 
             if (funcao.blocoVazio) {
@@ -456,6 +489,7 @@ public class AnalisadorCabecalhosFuncoes {
             funcaoAtual = anteriorFuncao;
             escopo = anteriorEscopo;
             encontrouRetornoValido = anteriorRetorno;
+            return noFuncao;
         }
 
         private List<Parametro> analisarParametrosFormais() {
@@ -488,30 +522,29 @@ public class AnalisadorCabecalhosFuncoes {
         }
 
         // ------------------------------ bloco ------------------------------
-        /** Analisa um bloco '{ ... }' e devolve o número de instruções que contém. */
-        private int analisarBloco() {
-            int contador = 0;
+        /** Analisa um bloco '{ ... }' e devolve o nó "corpo" com as instruções. */
+        private NoAST analisarBloco() {
+            NoAST corpo = new NoAST("corpo");
             if (!verifica(ClasseToken.ABRE_CHAVE)) {
                 consome(ClasseToken.ABRE_CHAVE, "'{' a abrir o corpo da função");
-                return contador;
+                return corpo;
             }
             avanca(); // {
             while (!verifica(ClasseToken.FECHA_CHAVE) && !fim()) {
                 int posAntes = pos;
-                boolean analisou = analisarInstrucao();
-                if (analisou) contador++;
+                NoAST instr = analisarInstrucao();
+                if (instr != null) corpo.add(instr);
                 if (pos == posAntes) { sincronizar(); }
             }
             consome(ClasseToken.FECHA_CHAVE, "'}' a fechar o corpo da função");
-            return contador;
+            return corpo;
         }
 
         // ------------------------------ instrucao ------------------------------
-        private boolean analisarInstrucao() {
+        private NoAST analisarInstrucao() {
             // Declaração de variável local: tipoParam IDENT [= expr] ;
             if (verificaLexema("int") || verificaLexema("double")) {
-                analisarDeclaracaoVariavel();
-                return true;
+                return analisarDeclaracaoVariavel();
             }
             if (verificaLexema("void")) {
                 Token t = atual();
@@ -519,35 +552,34 @@ public class AnalisadorCabecalhosFuncoes {
                         "'void' não pode ser usado como tipo de variável local.");
                 avanca();
                 sincronizar();
-                return true;
+                return new NoAST("declaração inválida (void)");
             }
             // return [expr] ;
             if (verificaLexema("return")) {
-                analisarRetorno();
-                return true;
+                return analisarRetorno();
             }
             // IDENT ... -> chamada ou atribuição
             if (verifica(ClasseToken.IDENTIFICADOR)) {
                 if (espreita(1).classe == ClasseToken.ABRE_PAR) {
-                    analisarChamadaComoInstrucao(escopo);
+                    return analisarChamadaComoInstrucao(escopo);
                 } else {
-                    analisarAtribuicao();
+                    return analisarAtribuicao();
                 }
-                return true;
             }
             // Ponto e vírgula solto = instrução vazia (tolerada)
-            if (verifica(ClasseToken.PONTO_VIRGULA)) { avanca(); return false; }
+            if (verifica(ClasseToken.PONTO_VIRGULA)) { avanca(); return null; }
 
             Token t = atual();
             erros.adicionar(Fase.SINTATICA, t.linha, t.coluna,
                     "Instrução inválida a começar em '" + t.lexema + "'.");
-            return false;
+            return null;
         }
 
-        private void analisarDeclaracaoVariavel() {
+        private NoAST analisarDeclaracaoVariavel() {
             Token tTipo = avanca();
             Tipo tipo = tipoDe(tTipo.lexema);
             Token nome = consome(ClasseToken.IDENTIFICADOR, "o nome da variável");
+            String nomeVar = nome != null ? nome.lexema : "<sem-nome>";
             if (nome != null) {
                 if (escopo.containsKey(nome.lexema)) {
                     erros.adicionar(Fase.SEMANTICA, nome.linha, nome.coluna,
@@ -556,19 +588,24 @@ public class AnalisadorCabecalhosFuncoes {
                     escopo.put(nome.lexema, tipo);
                 }
             }
+            NoAST no = new NoAST("declaração " + tipo.name().toLowerCase() + " " + nomeVar);
             if (verifica(ClasseToken.OP_ATRIB)) {
                 avanca();
-                Tipo tExpr = analisarExpressao();
-                if (nome != null && !Tipo.compativel(tipo, tExpr)) {
+                ResExpr r = analisarExpressao();
+                if (nome != null && !Tipo.compativel(tipo, r.tipo)) {
                     erros.adicionar(Fase.SEMANTICA, nome.linha, nome.coluna,
-                            "Não é possível atribuir valor " + tExpr.name().toLowerCase()
+                            "Não é possível atribuir valor " + r.tipo.name().toLowerCase()
                             + " à variável '" + nome.lexema + "' do tipo " + tipo.name().toLowerCase() + ".");
                 }
+                NoAST atrib = new NoAST("inicialização '='");
+                atrib.add(r.no);
+                no.add(atrib);
             }
             consome(ClasseToken.PONTO_VIRGULA, "';' no fim da declaração");
+            return no;
         }
 
-        private void analisarAtribuicao() {
+        private NoAST analisarAtribuicao() {
             Token nome = avanca(); // IDENT
             Tipo tipoVar = escopo.get(nome.lexema);
             if (tipoVar == null) {
@@ -577,17 +614,21 @@ public class AnalisadorCabecalhosFuncoes {
                 tipoVar = Tipo.ERRO;
             }
             consome(ClasseToken.OP_ATRIB, "'=' na atribuição");
-            Tipo tExpr = analisarExpressao();
-            if (!Tipo.compativel(tipoVar, tExpr)) {
+            ResExpr r = analisarExpressao();
+            if (!Tipo.compativel(tipoVar, r.tipo)) {
                 erros.adicionar(Fase.SEMANTICA, nome.linha, nome.coluna,
-                        "Não é possível atribuir valor " + tExpr.name().toLowerCase()
+                        "Não é possível atribuir valor " + r.tipo.name().toLowerCase()
                         + " à variável '" + nome.lexema + "' do tipo " + tipoVar.name().toLowerCase() + ".");
             }
             consome(ClasseToken.PONTO_VIRGULA, "';' no fim da atribuição");
+            NoAST no = new NoAST("atribuição " + nome.lexema + " =");
+            no.add(r.no);
+            return no;
         }
 
-        private void analisarRetorno() {
+        private NoAST analisarRetorno() {
             Token tReturn = avanca(); // return
+            NoAST no = new NoAST("return");
             if (verifica(ClasseToken.PONTO_VIRGULA)) {
                 avanca();
                 // 'return;' sem valor
@@ -597,39 +638,47 @@ public class AnalisadorCabecalhosFuncoes {
                             + funcaoAtual.tipoRetorno.name().toLowerCase()
                             + " deve retornar um valor.");
                 }
-                return;
+                return no;
             }
-            Tipo tExpr = analisarExpressao();
+            ResExpr r = analisarExpressao();
+            no.add(r.no);
             consome(ClasseToken.PONTO_VIRGULA, "';' no fim do 'return'");
             if (funcaoAtual != null) {
                 if (funcaoAtual.tipoRetorno == Tipo.VOID) {
                     erros.adicionar(Fase.SEMANTICA, tReturn.linha, tReturn.coluna,
                             "Função '" + funcaoAtual.nome + "' é void (sem retorno) e não pode retornar valor.");
-                } else if (!Tipo.compativel(funcaoAtual.tipoRetorno, tExpr)) {
+                } else if (!Tipo.compativel(funcaoAtual.tipoRetorno, r.tipo)) {
                     erros.adicionar(Fase.SEMANTICA, tReturn.linha, tReturn.coluna,
-                            "Retorno de tipo " + tExpr.name().toLowerCase() + " incompatível com o tipo "
+                            "Retorno de tipo " + r.tipo.name().toLowerCase() + " incompatível com o tipo "
                             + funcaoAtual.tipoRetorno.name().toLowerCase() + " da função '" + funcaoAtual.nome + "'.");
                 } else {
                     encontrouRetornoValido = true;
                 }
             }
+            return no;
         }
 
         // ------------------------------ chamada ------------------------------
-        private void analisarChamadaComoInstrucao(Map<String, Tipo> escopoLocal) {
-            analisarChamada(escopoLocal);
+        private NoAST analisarChamadaComoInstrucao(Map<String, Tipo> escopoLocal) {
+            ResExpr r = analisarChamada(escopoLocal);
             consome(ClasseToken.PONTO_VIRGULA, "';' no fim da chamada");
+            return r.no;
         }
 
-        /** Analisa uma chamada IDENT( actuais ) e devolve o tipo de retorno da função. */
-        private Tipo analisarChamada(Map<String, Tipo> escopoLocal) {
+        /** Analisa uma chamada IDENT( actuais ) e devolve o tipo de retorno e o nó da AST. */
+        private ResExpr analisarChamada(Map<String, Tipo> escopoLocal) {
             Token nome = avanca(); // IDENT
             consome(ClasseToken.ABRE_PAR, "'(' na chamada de função");
 
+            NoAST no = new NoAST("chamada " + nome.lexema + "(...)");
             List<Tipo> actuais = new ArrayList<>();
             if (!verifica(ClasseToken.FECHA_PAR)) {
                 do {
-                    actuais.add(analisarExpressao());
+                    ResExpr arg = analisarExpressao();
+                    actuais.add(arg.tipo);
+                    NoAST noArg = new NoAST("arg " + actuais.size() + " : " + arg.tipo.name().toLowerCase());
+                    noArg.add(arg.no);
+                    no.add(noArg);
                 } while (verifica(ClasseToken.VIRGULA) && avanca() != null);
             }
             consome(ClasseToken.FECHA_PAR, "')' a fechar a chamada de função");
@@ -639,7 +688,7 @@ public class AnalisadorCabecalhosFuncoes {
             if (f == null) {
                 erros.adicionar(Fase.SEMANTICA, nome.linha, nome.coluna,
                         "Chamada à função '" + nome.lexema + "' que não foi declarada.");
-                return Tipo.ERRO;
+                return new ResExpr(Tipo.ERRO, no);
             }
 
             // Número de parâmetros
@@ -660,52 +709,57 @@ public class AnalisadorCabecalhosFuncoes {
                     }
                 }
             }
-            return f.tipoRetorno;
+            return new ResExpr(f.tipoRetorno, no);
         }
 
         // ------------------------------ expressao ------------------------------
-        private Tipo analisarExpressao() {
-            Tipo t = analisarTermo();
+        private ResExpr analisarExpressao() {
+            ResExpr r = analisarTermo();
             while (verifica(ClasseToken.OP_ARIT)) {
-                avanca();
-                Tipo t2 = analisarTermo();
-                t = combinarNumerico(t, t2);
+                Token op = avanca();
+                ResExpr r2 = analisarTermo();
+                Tipo t = combinarNumerico(r.tipo, r2.tipo);
+                NoAST no = new NoAST("operador '" + op.lexema + "' : " + t.name().toLowerCase());
+                no.add(r.no);
+                no.add(r2.no);
+                r = new ResExpr(t, no);
             }
-            return t;
+            return r;
         }
 
-        private Tipo analisarTermo() {
+        private ResExpr analisarTermo() {
             Token t = atual();
             switch (t.classe) {
-                case NUMERO_INT:  avanca(); return Tipo.INT;
-                case NUMERO_REAL: avanca(); return Tipo.DOUBLE;
+                case NUMERO_INT:  avanca(); return new ResExpr(Tipo.INT, new NoAST("literal int " + t.lexema));
+                case NUMERO_REAL: avanca(); return new ResExpr(Tipo.DOUBLE, new NoAST("literal double " + t.lexema));
                 case ABRE_PAR:
                     avanca();
-                    Tipo interno = analisarExpressao();
+                    ResExpr interno = analisarExpressao();
                     consome(ClasseToken.FECHA_PAR, "')' a fechar a subexpressão");
                     return interno;
                 case IDENTIFICADOR:
                     if (espreita(1).classe == ClasseToken.ABRE_PAR) {
-                        Tipo tr = analisarChamada(escopo != null ? escopo : new java.util.HashMap<>());
-                        if (tr == Tipo.VOID) {
+                        ResExpr rc = analisarChamada(escopo != null ? escopo : new java.util.HashMap<>());
+                        if (rc.tipo == Tipo.VOID) {
                             erros.adicionar(Fase.SEMANTICA, t.linha, t.coluna,
                                     "Função void '" + t.lexema + "' não devolve valor e não pode ser usada numa expressão.");
-                            return Tipo.ERRO;
+                            return new ResExpr(Tipo.ERRO, rc.no);
                         }
-                        return tr;
+                        return rc;
                     } else {
                         avanca();
                         if (escopo != null && escopo.containsKey(t.lexema)) {
-                            return escopo.get(t.lexema);
+                            Tipo tv = escopo.get(t.lexema);
+                            return new ResExpr(tv, new NoAST("var " + t.lexema + " : " + tv.name().toLowerCase()));
                         }
                         erros.adicionar(Fase.SEMANTICA, t.linha, t.coluna,
                                 "Identificador '" + t.lexema + "' não foi declarado.");
-                        return Tipo.ERRO;
+                        return new ResExpr(Tipo.ERRO, new NoAST("var " + t.lexema + " : erro"));
                     }
                 default:
                     erros.adicionar(Fase.SINTATICA, t.linha, t.coluna,
                             "Esperava um valor/expressão mas encontrou '" + t.lexema + "'.");
-                    return Tipo.ERRO;
+                    return new ResExpr(Tipo.ERRO, new NoAST("<expressão inválida>"));
             }
         }
 
@@ -809,16 +863,18 @@ public class AnalisadorCabecalhosFuncoes {
         final List<Token> tokens;
         final TabelaSimbolos tabela;
         final ColetorErros erros;
+        final NoAST ast;
         final String relatorio;
         final int nErros;
         final int nAvisos;
 
         Resultado(String origem, List<Token> tokens, TabelaSimbolos tabela,
-                  ColetorErros erros, String relatorio) {
+                  ColetorErros erros, NoAST ast, String relatorio) {
             this.origem = origem;
             this.tokens = tokens;
             this.tabela = tabela;
             this.erros = erros;
+            this.ast = ast;
             this.relatorio = relatorio;
             int e = 0, a = 0;
             for (Erro er : erros.ordenados()) { if (er.fase == Fase.AVISO) a++; else e++; }
@@ -834,9 +890,10 @@ public class AnalisadorCabecalhosFuncoes {
         ColetorErros erros = new ColetorErros();
         TabelaSimbolos tabela = new TabelaSimbolos();
         List<Token> tokens = new Lexer(origem, erros).tokenizar();   // Fase 1 — Léxica
-        new Parser(tokens, erros, tabela).analisarPrograma();        // Fases 2 e 3
+        Parser parser = new Parser(tokens, erros, tabela);
+        parser.analisarPrograma();                                   // Fases 2 e 3
         String rel = gerarRelatorio(origem, tokens, tabela, erros);  // Fase 4
-        return new Resultado(origem, tokens, tabela, erros, rel);
+        return new Resultado(origem, tokens, tabela, erros, parser.raiz, rel);
     }
 
     // ================================================================
@@ -1034,9 +1091,11 @@ public class AnalisadorCabecalhosFuncoes {
      */
     static final class AnalisadorGUI extends JFrame {
         private final JTextPane areaCodigo;
-        private final JTextPane areaRelatorio;
         private final JPanel painelChips;
         private final Timer debounce;
+        private JTextPane areaRelatorio;
+        private DefaultTableModel modeloLexemas, modeloSimbolos, modeloErros;
+        private JTree arvore;
 
         // Estilos do realce de sintaxe
         private final SimpleAttributeSet estBase = new SimpleAttributeSet();
@@ -1084,20 +1143,13 @@ public class AnalisadorCabecalhosFuncoes {
             spCodigo.getViewport().setBackground(BG_EDITOR);
             spCodigo.setRowHeaderView(new GutterLinhas(areaCodigo));
 
-            // ---- Relatório colorido ----
-            areaRelatorio = new JTextPane();
-            areaRelatorio.setFont(new Font(Font.MONOSPACED, Font.PLAIN, 13));
-            areaRelatorio.setEditable(false);
-            areaRelatorio.setBackground(BG_CARTAO);
-            areaRelatorio.setBorder(new EmptyBorder(10, 12, 10, 12));
-            JScrollPane spRelatorio = new JScrollPane(areaRelatorio);
-            spRelatorio.setBorder(null);
-            spRelatorio.getViewport().setBackground(BG_CARTAO);
+            // ---- Painel de resultados com abas ----
+            JTabbedPane abas = construirAbas();
 
             JSplitPane divisor = new JSplitPane(JSplitPane.HORIZONTAL_SPLIT,
                     construirCartao("CÓDIGO FONTE", spCodigo),
-                    construirCartao("RELATÓRIO  ·  LÉXICO · SINTÁCTICO · SEMÂNTICO", spRelatorio));
-            divisor.setResizeWeight(0.44);
+                    construirCartao("ANÁLISE", abas));
+            divisor.setResizeWeight(0.42);
             divisor.setBorder(new EmptyBorder(10, 12, 6, 12));
             divisor.setBackground(BG);
             divisor.setDividerSize(10);
@@ -1229,11 +1281,166 @@ public class AnalisadorCabecalhosFuncoes {
             }
         }
 
+        // ---- Painel de abas (Resumo, Lexemas, Símbolos, AST, Erros) ----
+        private JTabbedPane construirAbas() {
+            UIManager.put("TabbedPane.selected", BG_CARTAO);
+            UIManager.put("TabbedPane.background", BG);
+            UIManager.put("TabbedPane.foreground", TXT);
+            JTabbedPane abas = new JTabbedPane();
+            abas.setBackground(BG);
+            abas.setForeground(TXT);
+            abas.setFont(FONTE_UI_B);
+
+            // Resumo: relatório colorido
+            areaRelatorio = new JTextPane();
+            areaRelatorio.setEditable(false);
+            areaRelatorio.setBackground(BG_CARTAO);
+            areaRelatorio.setBorder(new EmptyBorder(10, 12, 10, 12));
+            abas.addTab("Resumo", envolver(areaRelatorio));
+
+            // Tabela de lexemas
+            modeloLexemas = modeloFixo("#", "Lexema", "Classe", "Linha", "Coluna");
+            abas.addTab("Lexemas", envolver(criarTabela(modeloLexemas)));
+
+            // Tabela de símbolos
+            modeloSimbolos = modeloFixo("Função", "Retorno", "Nº Parâm.", "Bloco", "Parâmetros formais");
+            abas.addTab("Símbolos", envolver(criarTabela(modeloSimbolos)));
+
+            // AST
+            arvore = new JTree(new DefaultMutableTreeNode("programa"));
+            estilizarArvore(arvore);
+            abas.addTab("AST", envolver(arvore));
+
+            // Tabela de erros (com tipo, linha, coluna e mensagem)
+            modeloErros = modeloFixo("Tipo", "Linha", "Coluna", "Mensagem");
+            JTable tabErros = criarTabela(modeloErros);
+            tabErros.getColumnModel().getColumn(0).setPreferredWidth(95);
+            tabErros.getColumnModel().getColumn(1).setPreferredWidth(45);
+            tabErros.getColumnModel().getColumn(2).setPreferredWidth(50);
+            tabErros.getColumnModel().getColumn(3).setPreferredWidth(380);
+            tabErros.setDefaultRenderer(Object.class, new RendererErros(modeloErros));
+            abas.addTab("Erros", envolver(tabErros));
+
+            return abas;
+        }
+
+        private JScrollPane envolver(JComponent c) {
+            JScrollPane sp = new JScrollPane(c);
+            sp.setBorder(null);
+            sp.getViewport().setBackground(BG_CARTAO);
+            return sp;
+        }
+
+        private DefaultTableModel modeloFixo(String... colunas) {
+            return new DefaultTableModel(colunas, 0) {
+                @Override public boolean isCellEditable(int r, int c) { return false; }
+            };
+        }
+
+        private JTable criarTabela(DefaultTableModel modelo) {
+            JTable t = new JTable(modelo);
+            t.setBackground(BG_CARTAO);
+            t.setForeground(TXT);
+            t.setGridColor(BORDA);
+            t.setRowHeight(24);
+            t.setFont(new Font(Font.MONOSPACED, Font.PLAIN, 12));
+            t.setSelectionBackground(new Color(0x3A3F5F));
+            t.setSelectionForeground(TXT);
+            t.setFillsViewportHeight(true);
+            JTableHeader h = t.getTableHeader();
+            h.setBackground(BG_BARRA);
+            h.setForeground(TXT_MUTE);
+            h.setFont(FONTE_UI_B);
+            return t;
+        }
+
+        private void estilizarArvore(JTree arv) {
+            arv.setBackground(BG_CARTAO);
+            arv.setForeground(TXT);
+            arv.setFont(new Font(Font.MONOSPACED, Font.PLAIN, 13));
+            arv.setRowHeight(22);
+            DefaultTreeCellRenderer rend = new DefaultTreeCellRenderer();
+            rend.setBackgroundNonSelectionColor(BG_CARTAO);
+            rend.setBackgroundSelectionColor(new Color(0x3A3F5F));
+            rend.setTextNonSelectionColor(TXT);
+            rend.setTextSelectionColor(TXT);
+            rend.setBorderSelectionColor(BORDA);
+            rend.setLeafIcon(null);
+            rend.setOpenIcon(null);
+            rend.setClosedIcon(null);
+            arv.setCellRenderer(rend);
+        }
+
+        /** Renderer da tabela de erros: pinta a linha de vermelho (erro) ou laranja (aviso). */
+        private final class RendererErros extends DefaultTableCellRenderer {
+            private final DefaultTableModel modelo;
+            RendererErros(DefaultTableModel modelo) {
+                this.modelo = modelo;
+                setFont(new Font(Font.MONOSPACED, Font.PLAIN, 12));
+            }
+            @Override public Component getTableCellRendererComponent(JTable t, Object v,
+                    boolean sel, boolean foco, int row, int col) {
+                super.getTableCellRendererComponent(t, v, sel, foco, row, col);
+                String tipo = String.valueOf(modelo.getValueAt(row, 0));
+                Color cor = tipo.startsWith("Aviso") ? COR_AVISO : COR_ERRO;
+                setForeground(sel ? TXT : cor);
+                setBackground(sel ? new Color(0x3A3F5F) : BG_CARTAO);
+                return this;
+            }
+        }
+
         // ---- Análise + render ----
         private void analisarAgora() {
             Resultado r = analisar(areaCodigo.getText());
             renderRelatorio(r);
+            atualizarTabelas(r);
             atualizarChips(r);
+        }
+
+        private void atualizarTabelas(Resultado r) {
+            // Lexemas
+            modeloLexemas.setRowCount(0);
+            int i = 1;
+            for (Token tk : r.tokens) {
+                if (tk.classe == ClasseToken.EOF) continue;
+                modeloLexemas.addRow(new Object[]{ i++, tk.lexema, tk.classe, tk.linha, tk.coluna });
+            }
+            // Símbolos
+            modeloSimbolos.setRowCount(0);
+            for (Funcao f : r.tabela.todas()) {
+                StringBuilder pars = new StringBuilder();
+                for (int k = 0; k < f.parametros.size(); k++) {
+                    if (k > 0) pars.append(", ");
+                    pars.append(f.parametros.get(k).tipo.name().toLowerCase())
+                        .append(' ').append(f.parametros.get(k).nome);
+                }
+                modeloSimbolos.addRow(new Object[]{ f.nome, f.tipoRetorno.name().toLowerCase(),
+                        f.parametros.size(), f.blocoVazio ? "vazio" : "ok",
+                        pars.length() == 0 ? "(sem parâmetros)" : pars.toString() });
+            }
+            // Erros
+            modeloErros.setRowCount(0);
+            for (Erro e : r.erros.ordenados()) {
+                modeloErros.addRow(new Object[]{ rotuloFase(e.fase), e.linha, e.coluna, e.mensagem });
+            }
+            // AST
+            arvore.setModel(new DefaultTreeModel(converter(r.ast)));
+            for (int k = 0; k < arvore.getRowCount(); k++) arvore.expandRow(k);
+        }
+
+        private String rotuloFase(Fase f) {
+            switch (f) {
+                case LEXICA: return "Léxico";
+                case SINTATICA: return "Sintáctico";
+                case SEMANTICA: return "Semântico";
+                default: return "Aviso";
+            }
+        }
+
+        private DefaultMutableTreeNode converter(NoAST no) {
+            DefaultMutableTreeNode d = new DefaultMutableTreeNode(no.rotulo);
+            for (NoAST filho : no.filhos) d.add(converter(filho));
+            return d;
         }
 
         private void renderRelatorio(Resultado r) {

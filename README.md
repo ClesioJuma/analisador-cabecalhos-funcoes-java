@@ -63,9 +63,26 @@ java AnalisadorCabecalhosFuncoes --gui
 ```
 
 Botões: **Analisar**, **Exemplo** (carrega o exemplo embutido), **Abrir
-ficheiro…** e **Limpar**.
+ficheiro…** e **Limpar**. A análise corre automaticamente enquanto se escreve.
+
+O painel de resultados está organizado em abas:
+
+- **Resumo** — o relatório completo das quatro fases, com secções e
+  erros/avisos a cores.
+- **Lexemas** — tabela de tokens (lexema, classe, linha, coluna).
+- **Símbolos** — tabela das funções (retorno, nº de parâmetros, se o bloco
+  é vazio e os parâmetros formais).
+- **AST** — a árvore sintáctica abstracta (funções, parâmetros, corpo,
+  instruções e expressões com o respectivo tipo).
+- **Erros** — tabela com o **tipo** do erro (Léxico / Sintáctico /
+  Semântico / Aviso), **linha**, **coluna** e mensagem, com as linhas a
+  vermelho (erro) ou laranja (aviso).
 
 ![Interface gráfica do analisador](gui.png)
+
+![Aba AST](ast.png)
+
+![Aba Erros](erros.png)
 
 ## Gramática reconhecida (EBNF)
 
