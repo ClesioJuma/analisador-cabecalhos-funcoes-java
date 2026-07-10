@@ -1,4 +1,12 @@
+import java.awt.BorderLayout;
+import java.awt.Color;
+import java.awt.Dimension;
+import java.awt.Font;
+import java.awt.GridLayout;
+import java.io.File;
 import java.io.IOException;
+import java.io.PrintWriter;
+import java.io.StringWriter;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Paths;
@@ -6,6 +14,19 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import javax.swing.BorderFactory;
+import javax.swing.JButton;
+import javax.swing.JFileChooser;
+import javax.swing.JFrame;
+import javax.swing.JLabel;
+import javax.swing.JOptionPane;
+import javax.swing.JPanel;
+import javax.swing.JScrollPane;
+import javax.swing.JSplitPane;
+import javax.swing.JTextArea;
+import javax.swing.SwingUtilities;
+import javax.swing.UIManager;
+import javax.swing.border.EmptyBorder;
 
 /**
  * Analisador de Cabeçalhos de Funções da Linguagem Java.
@@ -716,40 +737,44 @@ public class AnalisadorCabecalhosFuncoes {
     // ================================================================
     // FASE 4 — RELATÓRIO (quatro quadros)
     // ================================================================
-    static void imprimirRelatorio(String origem, List<Token> tokens,
-                                  TabelaSimbolos tabela, ColetorErros erros) {
-        System.out.println("======================================================================");
-        System.out.println("  ANALISADOR DE CABEÇALHOS DE FUNÇÕES JAVA");
-        System.out.println("======================================================================");
+    /** Constrói o relatório completo (quatro quadros) como texto. */
+    static String gerarRelatorio(String origem, List<Token> tokens,
+                                 TabelaSimbolos tabela, ColetorErros erros) {
+        StringWriter sw = new StringWriter();
+        PrintWriter out = new PrintWriter(sw);
+
+        out.println("======================================================================");
+        out.println("  ANALISADOR DE CABEÇALHOS DE FUNÇÕES JAVA");
+        out.println("======================================================================");
 
         // 1) Código fonte numerado
-        System.out.println("\n[1] CÓDIGO FONTE");
-        System.out.println("----------------------------------------------------------------------");
+        out.println("\n[1] CÓDIGO FONTE");
+        out.println("----------------------------------------------------------------------");
         String[] linhas = origem.split("\n", -1);
         for (int i = 0; i < linhas.length; i++) {
-            System.out.printf("%4d | %s%n", i + 1, linhas[i]);
+            out.printf("%4d | %s%n", i + 1, linhas[i]);
         }
 
         // 2) Tabela de lexemas
-        System.out.println("\n[2] TABELA DE LEXEMAS (TOKENS)");
-        System.out.println("----------------------------------------------------------------------");
-        System.out.printf("%-18s | %-16s | %-6s | %-6s%n", "LEXEMA", "CLASSE", "LINHA", "COLUNA");
-        System.out.println("----------------------------------------------------------------------");
+        out.println("\n[2] TABELA DE LEXEMAS (TOKENS)");
+        out.println("----------------------------------------------------------------------");
+        out.printf("%-18s | %-16s | %-6s | %-6s%n", "LEXEMA", "CLASSE", "LINHA", "COLUNA");
+        out.println("----------------------------------------------------------------------");
         for (Token t : tokens) {
             if (t.classe == ClasseToken.EOF) continue;
-            System.out.printf("%-18s | %-16s | %-6d | %-6d%n",
+            out.printf("%-18s | %-16s | %-6d | %-6d%n",
                     t.lexema, t.classe, t.linha, t.coluna);
         }
 
         // 3) Tabela de símbolos
-        System.out.println("\n[3] TABELA DE SÍMBOLOS (FUNÇÕES)");
-        System.out.println("----------------------------------------------------------------------");
+        out.println("\n[3] TABELA DE SÍMBOLOS (FUNÇÕES)");
+        out.println("----------------------------------------------------------------------");
         if (tabela.todas().isEmpty()) {
-            System.out.println("  (nenhuma função declarada)");
+            out.println("  (nenhuma função declarada)");
         } else {
-            System.out.printf("%-14s | %-8s | %-6s | %-8s | %s%n",
+            out.printf("%-14s | %-8s | %-6s | %-8s | %s%n",
                     "NOME", "RETORNO", "Nº PAR", "BLOCO", "PARÂMETROS FORMAIS");
-            System.out.println("----------------------------------------------------------------------");
+            out.println("----------------------------------------------------------------------");
             for (Funcao f : tabela.todas()) {
                 StringBuilder pars = new StringBuilder();
                 for (int i = 0; i < f.parametros.size(); i++) {
@@ -757,7 +782,7 @@ public class AnalisadorCabecalhosFuncoes {
                     pars.append(f.parametros.get(i).tipo.name().toLowerCase())
                         .append(' ').append(f.parametros.get(i).nome);
                 }
-                System.out.printf("%-14s | %-8s | %-6d | %-8s | %s%n",
+                out.printf("%-14s | %-8s | %-6d | %-8s | %s%n",
                         f.nome, f.tipoRetorno.name().toLowerCase(), f.parametros.size(),
                         f.blocoVazio ? "vazio" : "ok",
                         pars.length() == 0 ? "(sem parâmetros)" : pars.toString());
@@ -765,23 +790,46 @@ public class AnalisadorCabecalhosFuncoes {
         }
 
         // 4) Lista de erros e avisos
-        System.out.println("\n[4] ERROS E AVISOS");
-        System.out.println("----------------------------------------------------------------------");
+        out.println("\n[4] ERROS E AVISOS");
+        out.println("----------------------------------------------------------------------");
         List<Erro> ordenados = erros.ordenados();
         if (ordenados.isEmpty()) {
-            System.out.println("  Nenhum erro encontrado. Análise concluída com sucesso.");
+            out.println("  Nenhum erro encontrado. Análise concluída com sucesso.");
         } else {
             int nErros = 0, nAvisos = 0;
             for (Erro e : ordenados) {
                 String etiqueta = e.fase == Fase.AVISO ? "AVISO" : ("ERRO " + e.fase);
-                System.out.printf("  [%-13s] linha %d, coluna %d: %s%n",
+                out.printf("  [%-13s] linha %d, coluna %d: %s%n",
                         etiqueta, e.linha, e.coluna, e.mensagem);
                 if (e.fase == Fase.AVISO) nAvisos++; else nErros++;
             }
-            System.out.println("----------------------------------------------------------------------");
-            System.out.printf("  Total: %d erro(s) e %d aviso(s).%n", nErros, nAvisos);
+            out.println("----------------------------------------------------------------------");
+            out.printf("  Total: %d erro(s) e %d aviso(s).%n", nErros, nAvisos);
         }
-        System.out.println("======================================================================");
+        out.println("======================================================================");
+
+        out.flush();
+        return sw.toString();
+    }
+
+    /** Resultado de uma análise: relatório em texto e indicação de erros. */
+    static final class Resultado {
+        final String relatorio;
+        final boolean temErros;
+        Resultado(String relatorio, boolean temErros) {
+            this.relatorio = relatorio;
+            this.temErros = temErros;
+        }
+    }
+
+    /** Executa as três fases sobre o código fonte e devolve o relatório. */
+    static Resultado analisar(String origem) {
+        ColetorErros erros = new ColetorErros();
+        TabelaSimbolos tabela = new TabelaSimbolos();
+        List<Token> tokens = new Lexer(origem, erros).tokenizar();   // Fase 1 — Léxica
+        new Parser(tokens, erros, tabela).analisarPrograma();        // Fases 2 e 3
+        String rel = gerarRelatorio(origem, tokens, tabela, erros);  // Fase 4
+        return new Resultado(rel, erros.temErros());
     }
 
     // ================================================================
@@ -819,6 +867,12 @@ public class AnalisadorCabecalhosFuncoes {
         "imprime(soma(1, 2));\n";      // ok: int -> int
 
     public static void main(String[] args) {
+        // Modo gráfico: java AnalisadorCabecalhosFuncoes --gui
+        if (args.length > 0 && (args[0].equals("--gui") || args[0].equals("-g"))) {
+            SwingUtilities.invokeLater(AnalisadorGUI::new);
+            return;
+        }
+
         String origem;
         if (args.length > 0) {
             try {
@@ -829,22 +883,122 @@ public class AnalisadorCabecalhosFuncoes {
             }
         } else {
             origem = EXEMPLO_EMBUTIDO;
-            System.out.println("(sem ficheiro indicado — a analisar o exemplo embutido)\n");
+            System.out.println("(sem ficheiro indicado — a analisar o exemplo embutido; use --gui para a interface gráfica)\n");
         }
 
-        ColetorErros erros = new ColetorErros();
-        TabelaSimbolos tabela = new TabelaSimbolos();
-
-        // Fase 1 — Léxica
-        List<Token> tokens = new Lexer(origem, erros).tokenizar();
-
-        // Fases 2 e 3 — Sintáctica + Semântica
-        new Parser(tokens, erros, tabela).analisarPrograma();
-
-        // Fase 4 — Relatório
-        imprimirRelatorio(origem, tokens, tabela, erros);
+        Resultado r = analisar(origem);
+        System.out.print(r.relatorio);
 
         // Código de saída: 1 se houve erros (não conta avisos)
-        if (erros.temErros()) System.exit(1);
+        if (r.temErros) System.exit(1);
+    }
+
+    // ================================================================
+    // INTERFACE GRÁFICA (Swing) — mesma lógica, com janela desktop
+    // ================================================================
+    /**
+     * Janela Swing simples: à esquerda escreve-se/cola-se o código, à direita
+     * aparece o relatório das quatro fases. Sem dependências externas.
+     */
+    static final class AnalisadorGUI extends JFrame {
+        private final JTextArea areaCodigo;
+        private final JTextArea areaRelatorio;
+        private final JLabel estado;
+
+        AnalisadorGUI() {
+            super("Analisador de Cabeçalhos de Funções Java");
+            try {
+                UIManager.setLookAndFeel(UIManager.getSystemLookAndFeelClassName());
+            } catch (Exception ignorado) { /* mantém o aspecto por omissão */ }
+
+            setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
+            Font mono = new Font(Font.MONOSPACED, Font.PLAIN, 13);
+
+            // ---- Área de código (entrada) ----
+            areaCodigo = new JTextArea(EXEMPLO_EMBUTIDO);
+            areaCodigo.setFont(mono);
+            areaCodigo.setBorder(new EmptyBorder(6, 8, 6, 8));
+            JScrollPane spCodigo = new JScrollPane(areaCodigo);
+            spCodigo.setBorder(BorderFactory.createTitledBorder("Código fonte"));
+
+            // ---- Área de relatório (saída) ----
+            areaRelatorio = new JTextArea();
+            areaRelatorio.setFont(mono);
+            areaRelatorio.setEditable(false);
+            areaRelatorio.setBorder(new EmptyBorder(6, 8, 6, 8));
+            JScrollPane spRelatorio = new JScrollPane(areaRelatorio);
+            spRelatorio.setBorder(BorderFactory.createTitledBorder("Relatório (Léxico · Sintáctico · Semântico)"));
+
+            JSplitPane divisor = new JSplitPane(JSplitPane.HORIZONTAL_SPLIT, spCodigo, spRelatorio);
+            divisor.setResizeWeight(0.42);
+
+            estado = new JLabel(" ");
+            estado.setBorder(new EmptyBorder(2, 10, 6, 10));
+
+            // ---- Barra de botões ----
+            JButton btAnalisar = new JButton("Analisar");
+            JButton btExemplo = new JButton("Exemplo");
+            JButton btAbrir = new JButton("Abrir ficheiro…");
+            JButton btLimpar = new JButton("Limpar");
+
+            btAnalisar.addActionListener(e -> analisarAgora());
+            btExemplo.addActionListener(e -> { areaCodigo.setText(EXEMPLO_EMBUTIDO); analisarAgora(); });
+            btAbrir.addActionListener(e -> abrirFicheiro());
+            btLimpar.addActionListener(e -> { areaCodigo.setText(""); areaRelatorio.setText(""); estado.setText(" "); });
+
+            JPanel botoes = new JPanel(new GridLayout(1, 0, 8, 0));
+            botoes.setBorder(new EmptyBorder(8, 8, 4, 8));
+            botoes.add(btAnalisar);
+            botoes.add(btExemplo);
+            botoes.add(btAbrir);
+            botoes.add(btLimpar);
+
+            JPanel topo = new JPanel(new BorderLayout());
+            topo.add(botoes, BorderLayout.CENTER);
+
+            JPanel rodape = new JPanel(new BorderLayout());
+            rodape.add(estado, BorderLayout.WEST);
+
+            add(topo, BorderLayout.NORTH);
+            add(divisor, BorderLayout.CENTER);
+            add(rodape, BorderLayout.SOUTH);
+
+            setPreferredSize(new Dimension(1050, 640));
+            pack();
+            setLocationRelativeTo(null);
+            setVisible(true);
+
+            analisarAgora(); // análise inicial do exemplo
+        }
+
+        private void analisarAgora() {
+            String origem = areaCodigo.getText();
+            Resultado r = analisar(origem);
+            areaRelatorio.setText(r.relatorio);
+            areaRelatorio.setCaretPosition(0);
+            if (r.temErros) {
+                estado.setText("Foram encontrados erros — ver o quadro [4] do relatório.");
+                estado.setForeground(new Color(0xB00020));
+            } else {
+                estado.setText("Análise concluída sem erros.");
+                estado.setForeground(new Color(0x1B7F3B));
+            }
+        }
+
+        private void abrirFicheiro() {
+            JFileChooser selector = new JFileChooser();
+            if (selector.showOpenDialog(this) == JFileChooser.APPROVE_OPTION) {
+                File f = selector.getSelectedFile();
+                try {
+                    String conteudo = new String(Files.readAllBytes(f.toPath()), StandardCharsets.UTF_8);
+                    areaCodigo.setText(conteudo);
+                    analisarAgora();
+                } catch (IOException ex) {
+                    JOptionPane.showMessageDialog(this,
+                            "Não foi possível ler o ficheiro:\n" + ex.getMessage(),
+                            "Erro", JOptionPane.ERROR_MESSAGE);
+                }
+            }
+        }
     }
 }

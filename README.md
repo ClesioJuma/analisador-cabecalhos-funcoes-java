@@ -50,6 +50,23 @@ java -Dstdout.encoding=UTF-8 AnalisadorCabecalhosFuncoes exemplos/com_erros.txt
 
 O programa devolve código de saída `1` quando há erros (avisos não contam).
 
+## Interface gráfica (Swing)
+
+Além do modo consola, há uma interface gráfica desktop em Java puro (Swing,
+sem dependências). Escreve-se ou cola-se o código à esquerda e o relatório
+das quatro fases aparece à direita, com uma barra de estado que indica se
+houve erros.
+
+```bash
+javac AnalisadorCabecalhosFuncoes.java
+java AnalisadorCabecalhosFuncoes --gui
+```
+
+Botões: **Analisar**, **Exemplo** (carrega o exemplo embutido), **Abrir
+ficheiro…** e **Limpar**.
+
+![Interface gráfica do analisador](gui.png)
+
 ## Gramática reconhecida (EBNF)
 
 ```
@@ -79,4 +96,5 @@ Classes internas dentro de `AnalisadorCabecalhosFuncoes`:
 - `TabelaSimbolos` / `Funcao` / `Parametro` — tabela de símbolos
 - `ColetorErros` / `Erro` / `Fase` — recolha unificada de erros e avisos
 - `Tipo` — sistema de tipos (`int`, `double`, `void`) e regras de compatibilidade
-- `imprimirRelatorio(...)` — os quatro quadros de saída
+- `gerarRelatorio(...)` / `analisar(...)` — produzem os quatro quadros como texto reutilizável
+- `AnalisadorGUI` — interface gráfica Swing (opcional, `--gui`)
